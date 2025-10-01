@@ -348,7 +348,21 @@ __global__ void runGmemCoalesced(int M, int N, int K, float alpha, float *A, flo
 {
     // HW1 TODO: copy runBasic() code here and update to avoid uncoalesced accesses to global memory.
     // Note, you are also free to change the grid dimensions in the kernel launch below.
+    const unsigned x = blockIdx.x * blockDim.x + threadIdx.x;
+    const unsigned y = blockIdx.y * blockDim.y + threadIdx.y;
 
+    if (x < M && y < N)
+    {
+        float tmp = 0.0;
+        // C = α*(AxB)+β*C
+        for (int i = 0; i < K; ++i)
+        {
+            // tmp += __A__[x][i] * __B__[i][y]
+            tmp += A[(x * K) + i] * B[(i * N) + y];
+        }
+        // __C__[x][y]
+        C[(x * N) + y] = (alpha * tmp) + (beta * C[x * N + y]);
+    }
 }
 
 const uint F = 32;
