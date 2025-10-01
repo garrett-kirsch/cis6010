@@ -100,7 +100,7 @@ int main(int argc, char **argv)
     const uint SEED = clFlags["rngseed"].as<uint>();
     generator.seed(SEED);
     printf("Multiplying two %u x %u matrices with %u trials using %s algorithm\n", SIZE, SIZE, REPS, algo2str(ALGO));
-
+    
     cudaCheck(cudaSetDevice(0));
 
     // Setup cublas
