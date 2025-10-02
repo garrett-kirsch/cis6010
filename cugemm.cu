@@ -1,6 +1,7 @@
 // TODO: before you submit on Canvas, include here:
-//   1) which GPU you used and
-//   2) what performance improvement you obtained over previous homework(s)
+//  NVIDIA A100
+//  Basic matmul: 247.88 GFLOPS
+//  Coalesced global memory access: 2152.41 GFLOPS
 
 #include <cassert>
 #include <cstdio>
@@ -348,20 +349,22 @@ __global__ void runGmemCoalesced(int M, int N, int K, float alpha, float *A, flo
 {
     // HW1 TODO: copy runBasic() code here and update to avoid uncoalesced accesses to global memory.
     // Note, you are also free to change the grid dimensions in the kernel launch below.
+    // Swap x and y to get coalesced accesses
     const unsigned x = blockIdx.x * blockDim.x + threadIdx.x;
     const unsigned y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (x < M && y < N)
+    if (x < N && y < M)
     {
         float tmp = 0.0;
-        // C = α*(AxB)+β*C
+        
         for (int i = 0; i < K; ++i)
         {
-            // tmp += __A__[x][i] * __B__[i][y]
-            tmp += A[(x * K) + i] * B[(i * N) + y];
+            // compute C[y][x] instead of C[x][y]
+            // A[y][i] * B[i][x]
+            tmp += A[(y * K) + i] * B[(i * N) + x];
         }
-        // __C__[x][y]
-        C[(x * N) + y] = (alpha * tmp) + (beta * C[x * N + y]);
+        // C[y][x]
+        C[(y * N) + x] = (alpha * tmp) + (beta * C[(y * N) + x]);
     }
 }
 
@@ -452,4 +455,6 @@ void runAlgo(Algo algo, cublasHandle_t handle, int M, int N, int K, float alpha,
     }
     cudaCheck(cudaDeviceSynchronize()); // wait for kernel to finish
     cudaCheck(cudaGetLastError());      // check for errors from kernel run
+
+
 }
