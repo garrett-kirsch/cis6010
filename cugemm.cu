@@ -3,6 +3,11 @@
 //  Basic matmul: 247.88 GFLOPS
 //  Coalesced global memory access: 2152.41 GFLOPS
 
+// NVIDIA GH200
+// Basic matmul: 486.41 GFLOPS
+// Coalesced global memory access: 4687.85 GFLOPS
+// Shared Memory: 8948.45 GFLOPS (F = 32)
+
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -383,6 +388,39 @@ __global__ void runSharedMem(int M, int N, int K, float alpha, float *A, float *
     __shared__ float SA[F][F];
     __shared__ float SB[F][F];
 
+    const unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+    const unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    float sum = 0.0f;
+
+    for (int i = 0; i < K; i += F) {
+        // load FxF tile of A
+        if (y < M && (i + threadIdx.x) < K) {
+            SA[threadIdx.y][threadIdx.x] = A[y * K + i + threadIdx.x];
+        } else {
+            SA[threadIdx.y][threadIdx.x] = 0.0f;
+        }
+
+        // load FxF tile of B
+        if ((i + threadIdx.y) < K && x < N) {
+            SB[threadIdx.y][threadIdx.x] = B[(i + threadIdx.y) * N + x];
+        } else {
+            SB[threadIdx.y][threadIdx.x] = 0.0f;
+        }
+
+        __syncthreads();
+
+        // compute partial dot product
+        for (int k = 0; k < F; k++) {
+            sum += SA[threadIdx.y][k] * SB[k][threadIdx.x];
+        }
+
+        __syncthreads();
+    }
+
+    if (x < N && y < M) {
+        C[(y * N) + x] = (alpha * sum) + (beta * C[(y * N) + x]);
+    }
 }
 
 const uint G = 4;
@@ -431,8 +469,8 @@ void runAlgo(Algo algo, cublasHandle_t handle, int M, int N, int K, float alpha,
         assert(0 == N % F);
         assert(0 == K % F);
         // TODO: update your grid here
-        dim3 gridDim(ROUND_UP_TO_NEAREST(M, 32), ROUND_UP_TO_NEAREST(N, 32));
-        dim3 blockDim(32, 32);
+        dim3 gridDim(ROUND_UP_TO_NEAREST(M, F), ROUND_UP_TO_NEAREST(N, F));
+        dim3 blockDim(F, F);
         runSharedMem<<<gridDim, blockDim>>>(M, N, K, alpha, A, B, beta, C);
         break;
     }
