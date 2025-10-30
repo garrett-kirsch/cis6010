@@ -7,6 +7,8 @@
 // Basic matmul: 486.41 GFLOPS
 // Coalesced global memory access: 4687.85 GFLOPS
 // Shared Memory: 8948.45 GFLOPS (F = 32)
+// Shared Memory with multiple cells per thread: 13163.44 GFLOPS (F = 32, G = 4)
+
 
 #include <cassert>
 #include <cstdio>
@@ -106,7 +108,7 @@ int main(int argc, char **argv)
     const uint SEED = clFlags["rngseed"].as<uint>();
     generator.seed(SEED);
     printf("Multiplying two %u x %u matrices with %u trials using %s algorithm\n", SIZE, SIZE, REPS, algo2str(ALGO));
-    
+
     cudaCheck(cudaSetDevice(0));
 
     // Setup cublas
@@ -361,7 +363,7 @@ __global__ void runGmemCoalesced(int M, int N, int K, float alpha, float *A, flo
     if (x < N && y < M)
     {
         float tmp = 0.0;
-        
+
         for (int i = 0; i < K; ++i)
         {
             // compute C[y][x] instead of C[x][y]
@@ -377,12 +379,12 @@ const uint F = 32;
 
 __global__ void runSharedMem(int M, int N, int K, float alpha, float *A, float *B, float beta, float *C)
 {
-    // HW2 TODO: Use shared memory to cache square FxF tiles of the A and B matrices in shared memory 
-    // (SA and SB, respectively, provided below). Each thread should compute the result for one cell 
+    // HW2 TODO: Use shared memory to cache square FxF tiles of the A and B matrices in shared memory
+    // (SA and SB, respectively, provided below). Each thread should compute the result for one cell
     // of the output matrix C.
 
     // Note, you will also need to change the grid dimensions in the kernel launch below to take into account the value
-    // of F (which is a constant, defined above). You should experiment with different values of F to see how it 
+    // of F (which is a constant, defined above). You should experiment with different values of F to see how it
     // affects performance.
 
     __shared__ float SA[F][F];
@@ -427,11 +429,11 @@ const uint G = 4;
 
 __global__ void runSharedMemMultiOutput(int M, int N, int K, float alpha, float *A, float *B, float beta, float *C)
 {
-    // HW3 TODO: Copy your runSharedMem() code here and update it so that each thread computes the result for GxG cells 
+    // HW3 TODO: Copy your runSharedMem() code here and update it so that each thread computes the result for GxG cells
     // of the output matrix C. Each thread should accumulate temporary results in the local LC matrix, provided below,
     // before writing them to C in global memory.
 
-    // Note, you will also need to change the grid dimensions in the kernel launch below. You should experiment 
+    // Note, you will also need to change the grid dimensions in the kernel launch below. You should experiment
     // with different values of F and G to see how they affect performance.
 
     __shared__ float SA[F][F];
@@ -439,6 +441,60 @@ __global__ void runSharedMemMultiOutput(int M, int N, int K, float alpha, float 
 
     float LC[G][G] = {0.0};
 
+    const unsigned int base_x = blockIdx.x * F + threadIdx.x * G;
+    const unsigned int base_y = blockIdx.y * F + threadIdx.y * G;
+
+
+    for (int i = 0; i < K; i += F) {
+        // load GxG elements into SA
+        for (int a = 0; a < G; a++) {
+            for (int b = 0; b < G; b++) {
+                int loadY = blockIdx.y * F + threadIdx.y * G + a;
+                int loadX = i + threadIdx.x * G + b;
+                if (loadY < M && loadX < K) {
+                    SA[threadIdx.y * G + a][threadIdx.x * G + b] = A[loadY * K + loadX];
+                } else {
+                    SA[threadIdx.y * G + a][threadIdx.x * G + b] = 0.0f;
+                }
+            }
+        }
+
+        // load G×G elements into SB
+        for (int a = 0; a < G; a++) {
+            for (int b = 0; b < G; b++) {
+                int loadY = i + threadIdx.y * G + a;
+                int loadX = blockIdx.x * F + threadIdx.x * G + b;
+                if (loadY < K && loadX < N) {
+                    SB[threadIdx.y * G + a][threadIdx.x * G + b] = B[loadY * N + loadX];
+                } else {
+                    SB[threadIdx.y * G + a][threadIdx.x * G + b] = 0.0f;
+                }
+            }
+        }
+
+        __syncthreads();
+
+        // compute partial dot product for GxG grid
+        for (int a = 0; a < G; a++) {
+            for (int b = 0; b < G; b ++) {
+                for (int k = 0; k < F; k++) {
+                     LC[a][b] += SA[threadIdx.y * G + a][k] * SB[k][threadIdx.x * G + b];
+                }
+            }
+        }
+
+
+        __syncthreads();
+    }
+    for (int a = 0; a < G; a++){
+        for (int b = 0; b < G; b++){
+            int y = base_y + a;
+            int x = base_x + b;
+            if (y < M && x < N) {
+                C[(y * N) + x] = (alpha * LC[a][b]) + (beta * C[(y * N) + x]);
+            }
+        }
+    }
 }
 
 void runAlgo(Algo algo, cublasHandle_t handle, int M, int N, int K, float alpha,
@@ -482,8 +538,8 @@ void runAlgo(Algo algo, cublasHandle_t handle, int M, int N, int K, float alpha,
         assert(0 == F % G);
         assert((F*F) / (G*G) >= F);
         // TODO: update your grid here
-        dim3 gridDim(ROUND_UP_TO_NEAREST(M, 32), ROUND_UP_TO_NEAREST(N, 32));
-        dim3 blockDim(32, 32);
+        dim3 gridDim(ROUND_UP_TO_NEAREST(M, F), ROUND_UP_TO_NEAREST(N, F));
+        dim3 blockDim(F / G, F / G);
         runSharedMemMultiOutput<<<gridDim, blockDim>>>(M, N, K, alpha, A, B, beta, C);
         break;
     }
