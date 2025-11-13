@@ -534,8 +534,8 @@ void runAlgo(Algo algo, cublasHandle_t handle, int M, int N, int K, float alpha,
         assert(0 == N % F);
         assert(0 == K % F);
         // TODO: update your grid here
-        dim3 gridDim(ROUND_UP_TO_NEAREST(M, 32), ROUND_UP_TO_NEAREST(N, 32));
-        dim3 blockDim(32, 32);
+        dim3 gridDim(ROUND_UP_TO_NEAREST(M, F), ROUND_UP_TO_NEAREST(N, F));
+        dim3 blockDim(F, F);
         runSharedMem<<<gridDim, blockDim>>>(M, N, K, alpha, A, B, beta, C);
         break;
     }
@@ -547,42 +547,45 @@ void runAlgo(Algo algo, cublasHandle_t handle, int M, int N, int K, float alpha,
         assert(0 == F % G);
         assert((F*F) / (G*G) >= F);
         // TODO: update your grid here
-        dim3 gridDim(ROUND_UP_TO_NEAREST(M, 32), ROUND_UP_TO_NEAREST(N, 32));
-        dim3 blockDim(32, 32);
+        dim3 gridDim(ROUND_UP_TO_NEAREST(M, F), ROUND_UP_TO_NEAREST(N, F));
+        dim3 blockDim(F / G, F / G);
         runSharedMemMultiOutput<<<gridDim, blockDim>>>(M, N, K, alpha, A, B, beta, C);
         break;
     }
     case smem_multioutput_1stream:
     {
-      assert(0 == M % F);
-      assert(0 == N % F);
-      assert(0 == K % F);
-      assert(0 == F % G);
-      assert((F*F) / (G*G) >= F);
-      cudaCheck(cudaMemcpy(A, hA, sizeof(float) * M * K, cudaMemcpyHostToDevice));
-      cudaCheck(cudaMemcpy(B, hB, sizeof(float) * K * N, cudaMemcpyHostToDevice));
-      cudaCheck(cudaMemcpy(C, hC, sizeof(float) * M * N, cudaMemcpyHostToDevice));
-      // TODO: HW4: use same grid & kernel launch as HW3
-      cudaMemcpy(hC, C, sizeof(float) * M * N, cudaMemcpyDeviceToHost);
-      break;
+        assert(0 == M % F);
+        assert(0 == N % F);
+        assert(0 == K % F);
+        assert(0 == F % G);
+        assert((F*F) / (G*G) >= F);
+        cudaCheck(cudaMemcpy(A, hA, sizeof(float) * M * K, cudaMemcpyHostToDevice));
+        cudaCheck(cudaMemcpy(B, hB, sizeof(float) * K * N, cudaMemcpyHostToDevice));
+        cudaCheck(cudaMemcpy(C, hC, sizeof(float) * M * N, cudaMemcpyHostToDevice));
+        // TODO: HW4: use same grid & kernel launch as HW3
+        dim3 gridDim(ROUND_UP_TO_NEAREST(M, F), ROUND_UP_TO_NEAREST(N, F));
+        dim3 blockDim(F / G, F / G);
+        runSharedMemMultiOutput<<<gridDim, blockDim>>>(M, N, K, alpha, A, B, beta, C);
+        cudaMemcpy(hC, C, sizeof(float) * M * N, cudaMemcpyDeviceToHost);
+        break;
     }
     case smem_multioutput_multistream:
     {
-      assert(0 == M % F);
-      assert(0 == N % F);
-      assert(0 == K % F);
-      assert(0 == F % G);
-      assert((F*F) / (G*G) >= F);
-      assert(0 == (N/F) % NUM_STREAMS);
+        assert(0 == M % F);
+        assert(0 == N % F);
+        assert(0 == K % F);
+        assert(0 == F % G);
+        assert((F*F) / (G*G) >= F);
+        assert(0 == (N/F) % NUM_STREAMS);
 
-      cudaStream_t streams[NUM_STREAMS];
-      for (int i = 0; i < NUM_STREAMS; ++i) {
-        cudaCheck(cudaStreamCreate(&streams[i]));
-      }
+        cudaStream_t streams[NUM_STREAMS];
+        for (int i = 0; i < NUM_STREAMS; ++i) {
+            cudaCheck(cudaStreamCreate(&streams[i]));
+        }
 
-      // TODO: HW4: use streams to overlap memory copies with kernel computation
-      
-      break;
+        // TODO: HW4: use streams to overlap memory copies with kernel computation
+        
+        break;
     }
     default:
         printf("Invalid algorithm: %d\n", algo);
