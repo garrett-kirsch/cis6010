@@ -2,6 +2,11 @@
 //  NVIDIA A100
 //  Basic matmul: 247.88 GFLOPS
 //  Coalesced global memory access: 2152.41 GFLOPS
+//  Shared Memory: 4108.71 GFLOPS (F = 32)
+//  Shared Memory with multiple cells per thread: 6154.01 GFLOPS (F = 32, G = 4)
+
+// 1 stream: 2178.71 GFLOPS
+// 8 streams: 3217.10 GFLOPS
 
 // NVIDIA GH200
 // Basic matmul: 486.41 GFLOPS
@@ -584,7 +589,47 @@ void runAlgo(Algo algo, cublasHandle_t handle, int M, int N, int K, float alpha,
         }
 
         // TODO: HW4: use streams to overlap memory copies with kernel computation
-        
+
+        // copy entire B matrix once, since all outputs depend on all of B
+        cudaCheck(cudaMemcpy(B, hB, sizeof(float) * K * N, cudaMemcpyHostToDevice));
+
+        // calculate rows per stream
+        int rowsPerStream = M / NUM_STREAMS;
+        int rowsOfBlocksPerStream = rowsPerStream / F;
+
+        // Launch operations in each stream
+        for (int i = 0; i < NUM_STREAMS; ++i) {
+            int startRow = i * rowsPerStream;
+            int offsetA = startRow * K;
+            int offsetC = startRow * N;
+            int sizeA = rowsPerStream * K * sizeof(float);
+            int sizeC = rowsPerStream * N * sizeof(float);
+
+            // async copy A slice to device
+            cudaCheck(cudaMemcpyAsync(A + offsetA, hA + offsetA, sizeA, 
+                                    cudaMemcpyHostToDevice, streams[i]));
+
+            // async copy C slice to device
+            cudaCheck(cudaMemcpyAsync(C + offsetC, hC + offsetC, sizeC, 
+                                    cudaMemcpyHostToDevice, streams[i]));
+
+            // launch kernel for this slice
+            dim3 gridDim(ROUND_UP_TO_NEAREST(N, F), rowsOfBlocksPerStream);
+            dim3 blockDim(F / G, F / G);
+            runSharedMemMultiOutput<<<gridDim, blockDim, 0, streams[i]>>>
+                (rowsPerStream, N, K, alpha, A + offsetA, B, beta, C + offsetC);
+
+            // async copy C slice back to host
+            cudaCheck(cudaMemcpyAsync(hC + offsetC, C + offsetC, sizeC, 
+                                    cudaMemcpyDeviceToHost, streams[i]));
+        }
+
+        // wait for all streams to complete
+        for (int i = 0; i < NUM_STREAMS; ++i) {
+            cudaCheck(cudaStreamSynchronize(streams[i]));
+            cudaCheck(cudaStreamDestroy(streams[i]));
+        }
+
         break;
     }
     default:
